@@ -231,7 +231,11 @@ jobs:
                         .mergeable, .url, .title] | @tsv' \
                 | sed "s|^|$repo\t|" >> /tmp/prs.tsv
               b=${branch[$repo]}
-              runs=$(gh api "repos/$OWNER/$repo/commits/$b/check-runs?per_page=100" --jq '[.check_runs[] | {status, conclusion}]')
+              # Leave out this run's own job: it is a check run on the
+              # caller repo's default branch, pending until this step ends.
+              # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
+              runs=$(gh api "repos/$OWNER/$repo/commits/$b/check-runs?per_page=100" \
+                --jq '[.check_runs[] | select((.details_url // "") | contains("/actions/runs/\($ENV.GITHUB_RUN_ID)/") | not) | {status, conclusion}]')
               statuses=$(gh api "repos/$OWNER/$repo/commits/$b/status" --jq '[.statuses[] | {state}]')
               state=$(jq -rn --argjson a "$runs" --argjson b "$statuses" "$checks"' $a + $b | checks')
               printf '%s\t%s\t%s\n' "$repo" "$b" "$state" >> /tmp/mains.tsv
