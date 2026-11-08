@@ -74,8 +74,11 @@ mdd-* repos are excluded for now.
   releases (GHCR has no timestamps), so it ages like the mise pin and both
   land in the same PR. The action validates `version:` against its own list;
   if it doesn't know the new zizmor yet, CI goes red and nothing automerges.
+- Renovate's own version (the runner's `renovate-version` input and the
+  validator image in `.mise.toml`) is looked up on npm, not GHCR, for the
+  same reason as zizmor: GHCR has no timestamps.
 - Custom managers: `prek.toml` hook revs (tag, or SHA with a tag comment),
-  and `renovate-version` in the runner workflow.
+  and the validator image in `.mise.toml`.
 
 osv-scanner stays in each repo's CI: it is the gate that stops automerge of
 a vulnerable update, and it covers transitives that Renovate's OSV check does
