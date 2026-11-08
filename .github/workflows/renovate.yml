@@ -57,10 +57,12 @@ jobs:
     uses: ./.github/workflows/renovate-run.yml # zizmor: ignore[self-repository]
     with:
       visibility: public
-      round: ${{ inputs.round || 1 }}
+      # workflow_dispatch inputs arrive as strings; the reusable workflow's
+      # number and boolean inputs reject them unconverted.
+      round: ${{ fromJSON(inputs.round || '1') }}
       dry-run: ${{ inputs.dryRun != 'off' && inputs.dryRun || '' }}
       filter: ${{ inputs.filter }}
-      force: ${{ inputs.force || false }}
+      force: ${{ fromJSON(inputs.force || 'false') }}
       log-level: ${{ inputs.logLevel || 'info' }}
       repo-cache: ${{ inputs.repoCache || 'enabled' }}
     secrets:
