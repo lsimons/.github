@@ -70,6 +70,9 @@ mdd-* repos are excluded for now.
   `.python-version` and python images) get their own PR without automerge.
 - Compatibility floors are never touched: `requires-python`, `engines`, the
   go.mod `go` directive (pinning would turn them into exact versions).
+- Overrides (package.json `overrides`/`resolutions`, pnpm-workspace
+  `overrides`) are left alone too: they are hand-maintained advisory
+  floors. Vulnerability fixes still raise them.
 - zizmor: the zizmor-action `version:` input is looked up on zizmor's GitHub
   releases (GHCR has no timestamps), so it ages like the mise pin and both
   land in the same PR. The action validates `version:` against its own list;
