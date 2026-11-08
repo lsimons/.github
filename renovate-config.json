@@ -72,6 +72,17 @@
       "overridePackageName": "zizmorcore/zizmor",
       "extractVersion": "^v(?<version>.+)$",
       "versioning": "semver"
+    },
+    {
+      "description": "Renovate's own image (the github-action renovate-version input, the validator in .mise.toml) is looked up on GHCR, which has no release timestamps, so the 7-day wait would not apply. Look it up on npm instead, which has them; same versions.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/renovatebot/renovate"
+      ],
+      "overrideDatasource": "npm",
+      "overridePackageName": "renovate"
     }
   ],
   "customManagers": [
@@ -88,18 +99,16 @@
       "datasourceTemplate": "github-tags"
     },
     {
-      "description": "Renovate itself: renovate-version in the runner workflow, and the validator image in .mise.toml (looked up on npm, which has release timestamps; GHCR does not).",
+      "description": "The Renovate image the validator runs from in .mise.toml (`docker run ... ghcr.io/renovatebot/renovate:<version>`). The runner's renovate-version input needs no custom manager: the github-actions manager reads it.",
       "customType": "regex",
       "managerFilePatterns": [
-        "/^\\.github/workflows/renovate-run\\.ya?ml$/",
         "/^\\.mise\\.toml$/"
       ],
       "matchStrings": [
-        "renovate-version:\\s*(?<currentValue>\\d+\\.\\d+\\.\\d+)",
         "ghcr\\.io/renovatebot/renovate:(?<currentValue>\\d+\\.\\d+\\.\\d+)"
       ],
-      "depNameTemplate": "renovate",
-      "datasourceTemplate": "npm"
+      "depNameTemplate": "ghcr.io/renovatebot/renovate",
+      "datasourceTemplate": "docker"
     }
   ]
 }
