@@ -1,0 +1,331 @@
+# One round of Renovate for lsimons/ repos, as a reusable workflow.
+#
+# Callers: .github/workflows/renovate.yml in this repo for the public repos
+# (free minutes), and a caller in a private repo for the private ones
+# (billed minutes, private logs). Each caller uses its own GitHub App. See
+# README.md.
+#
+# A round:
+#   1. mints an App token scoped to one visibility (public or private),
+#   2. runs Renovate over the repos that commit a renovate.json,
+#   3. waits for CI on Renovate's open PRs and on each default branch,
+#   4. writes a summary, and
+#   5. dispatches the caller again if a green automerge PR is left (or one
+#      Renovate will rebase).
+#
+# Why rounds: Renovate merges at most two PRs per repo per run, and a PR
+# merged after another one first needs a rebase and fresh CI. Chaining
+# rounds takes a weekly batch from "due" to "merged, main green" in one
+# sitting instead of one step per scheduled run.
+name: Renovate round
+
+on:
+  workflow_call:
+    inputs:
+      visibility:
+        description: "public or private: which repos this round may touch"
+        required: true
+        type: string
+      round:
+        type: number
+        default: 1
+      max-rounds:
+        type: number
+        default: 5
+      dry-run:
+        description: "empty (live), lookup or full"
+        type: string
+        default: ""
+      filter:
+        description: "autodiscoverFilter, e.g. lsimons/caseum (empty = every scoped repo)"
+        type: string
+        default: ""
+      force:
+        description: "Ignore the Monday schedule and take everything that is due"
+        type: boolean
+        default: false
+      log-level:
+        type: string
+        default: info
+      repo-cache:
+        description: "enabled or reset"
+        type: string
+        default: enabled
+      workflow-file:
+        description: "The caller's workflow file, dispatched for the next round"
+        type: string
+        default: renovate.yml
+    secrets:
+      app-client-id:
+        required: true
+      app-private-key:
+        required: true
+
+permissions: {}
+
+jobs:
+  round:
+    name: Renovate round ${{ inputs.round }} (${{ inputs.visibility }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: write # dispatch the next round
+    steps:
+      # Installation-wide on purpose: it only lists the installation's repos
+      # so the next token can be scoped. Metadata read is all it can do.
+      - name: Create App token (installation-wide, metadata only)
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.app-client-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }} # zizmor: ignore[github-app]
+          permission-metadata: read
+
+      # Renovate cannot filter autodiscovered repos by visibility, so the
+      # token does it: the next step mints one that only reaches these repos.
+      # The public runner's logs and report are public, so it refuses to run
+      # at all if its App can reach a private repo.
+      - name: Scope to ${{ inputs.visibility }} repos
+        id: scope
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VISIBILITY: ${{ inputs.visibility }}
+        run: |
+          set -euo pipefail
+          gh api --paginate /installation/repositories \
+            --jq '.repositories[] | [.name, (if .private then "private" else "public" end), (.archived | tostring)] | @tsv' \
+            > /tmp/installation-repos.tsv
+          case "$VISIBILITY" in
+            public)
+              private_repos=$(awk -F'\t' '$2 == "private" { print $1 }' /tmp/installation-repos.tsv)
+              if [ -n "$private_repos" ]; then
+                # Count only: naming them would put them in a public log.
+                echo "::error::The public runner's App can reach $(echo "$private_repos" | wc -l | tr -d ' ') private repo(s), and this run's logs are public. Limit the App installation to public repos."
+                exit 1
+              fi
+              ;;
+            private) ;;
+            *)
+              echo "::error::visibility must be public or private, got '$VISIBILITY'"
+              exit 1
+              ;;
+          esac
+          # mdd-* repos are excluded from Renovate for now.
+          repos=$(awk -F'\t' -v vis="$VISIBILITY" '$2 == vis && $3 == "false" && $1 !~ /^mdd-/ { print $1 }' \
+            /tmp/installation-repos.tsv | sort | paste -sd, -)
+          if [ -z "$repos" ]; then
+            # An empty list would make the next step mint a token for every repo.
+            echo "::error::No $VISIBILITY repos in the App installation"
+            exit 1
+          fi
+          echo "Scope ($VISIBILITY): ${repos//,/, }"
+          {
+            echo "repos=$repos"
+            echo "scoped-at=$(date +%s)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create App token (scoped)
+        id: scoped-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.app-client-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.scope.outputs.repos }}
+          # What Renovate needs (see its GitHub App docs). The App must grant
+          # at least these.
+          permission-administration: read
+          permission-checks: write
+          permission-contents: write
+          permission-issues: write
+          permission-metadata: read
+          permission-pull-requests: write
+          permission-statuses: write
+          permission-vulnerability-alerts: read
+          permission-workflows: write
+
+      - name: Restore repository cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /tmp/renovate/cache/renovate/repository
+          key: renovate-repo-cache-${{ inputs.visibility }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: renovate-repo-cache-${{ inputs.visibility }}-
+
+      - name: Hand cache to the Renovate container user
+        run: |
+          mkdir -p /tmp/renovate
+          sudo chown -R 12021:0 /tmp/renovate
+
+      # All global config is here, as RENOVATE_* variables, so both callers
+      # share it. Repo policy lives in renovate-config.json.
+      - name: Renovate
+        id: renovate
+        uses: renovatebot/github-action@43b963bf5dd5e57f1f95c59765a018d782870211 # v46.3.11
+        with:
+          token: ${{ steps.scoped-token.outputs.token }}
+          renovate-version: 44.198.3
+        env:
+          LOG_LEVEL: ${{ inputs.log-level }}
+          RENOVATE_PLATFORM: github
+          RENOVATE_AUTODISCOVER: "true"
+          # The token already limits discovery to the scoped repos; repos
+          # without a renovate.json are skipped (requireConfig).
+          RENOVATE_AUTODISCOVER_FILTER: ${{ inputs.filter || format('!{0}/mdd-*', github.repository_owner) }}
+          RENOVATE_ONBOARDING: "false"
+          RENOVATE_REQUIRE_CONFIG: required
+          RENOVATE_PLATFORM_COMMIT: enabled
+          RENOVATE_REPOSITORY_CACHE: ${{ inputs.repo-cache }}
+          RENOVATE_ALLOWED_UNSAFE_EXECUTIONS: '["mise"]'
+          RENOVATE_REPORT_TYPE: file
+          RENOVATE_REPORT_PATH: /tmp/renovate/report.json
+          RENOVATE_DRY_RUN: ${{ inputs.dry-run }}
+          RENOVATE_FORCE: ${{ inputs.force && '{"schedule":["at any time"],"lockFileMaintenance":{"schedule":["at any time"]}}' || '' }}
+
+      - name: Wait for CI and summarise
+        id: wait
+        if: ${{ !cancelled() && steps.scoped-token.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ steps.scoped-token.outputs.token }}
+          APP_SLUG: ${{ steps.scoped-token.outputs.app-slug }}
+          OWNER: ${{ github.repository_owner }}
+          REPOS: ${{ steps.scope.outputs.repos }}
+          SCOPED_AT: ${{ steps.scope.outputs.scoped-at }}
+          VISIBILITY: ${{ inputs.visibility }}
+          ROUND: ${{ inputs.round }}
+          MAX_ROUNDS: ${{ inputs.max-rounds }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          RENOVATE_OUTCOME: ${{ steps.renovate.outcome }}
+        run: |
+          set -euo pipefail
+          # App tokens live 60 minutes; stop polling at 50.
+          deadline=$((SCOPED_AT + 50 * 60))
+
+          # Check runs (REST or GraphQL) have status/conclusion; commit
+          # statuses have state. "none" means no checks at all, which
+          # Renovate treats as pending and never automerges.
+          checks='def checks:
+            if length == 0 then "none"
+            elif any(.[]; ((.status // "COMPLETED") | ascii_upcase) != "COMPLETED"
+                       or ((.state // "") | ascii_upcase | IN("PENDING", "EXPECTED"))) then "pending"
+            elif any(.[]; ((.conclusion // "") | ascii_upcase | IN("FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"))
+                       or ((.state // "") | ascii_upcase | IN("FAILURE", "ERROR"))) then "red"
+            else "green" end;'
+
+          declare -A branch
+          for repo in ${REPOS//,/ }; do
+            branch[$repo]=$(gh api "repos/$OWNER/$repo" --jq .default_branch)
+          done
+
+          # prs.tsv:   repo, number, checks, automerge, mergeable, url, title
+          # mains.tsv: repo, branch, checks
+          snapshot() {
+            : > /tmp/prs.tsv
+            : > /tmp/mains.tsv
+            for repo in ${REPOS//,/ }; do
+              gh pr list -R "$OWNER/$repo" --author "app/$APP_SLUG" --state open --limit 100 \
+                --json number,title,url,body,mergeable,statusCheckRollup \
+                --jq "$checks"' .[] | [(.number | tostring), (.statusCheckRollup | checks),
+                        (if ((.body // "") | contains("**Automerge**: Enabled")) then "yes" else "no" end),
+                        .mergeable, .url, .title] | @tsv' \
+                | sed "s|^|$repo\t|" >> /tmp/prs.tsv
+              b=${branch[$repo]}
+              runs=$(gh api "repos/$OWNER/$repo/commits/$b/check-runs?per_page=100" --jq '[.check_runs[] | {status, conclusion}]')
+              statuses=$(gh api "repos/$OWNER/$repo/commits/$b/status" --jq '[.statuses[] | {state}]')
+              state=$(jq -rn --argjson a "$runs" --argjson b "$statuses" "$checks"' $a + $b | checks')
+              printf '%s\t%s\t%s\n' "$repo" "$b" "$state" >> /tmp/mains.tsv
+            done
+          }
+
+          if [ -n "$DRY_RUN" ]; then
+            snapshot
+          else
+            sleep 60 # let CI register runs for what Renovate just pushed
+            while :; do
+              snapshot
+              pending=$(cut -f3 /tmp/prs.tsv /tmp/mains.tsv | grep -c '^pending$' || true)
+              [ "$pending" -eq 0 ] && break
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "::warning::Stopped waiting with $pending check set(s) still pending (token deadline)"
+                break
+              fi
+              echo "$(date -u +%H:%M:%S) waiting on $pending pending check set(s)"
+              sleep 60
+            done
+          fi
+
+          # Another round helps if Renovate would merge (green), rebase
+          # (conflicting) or just has not seen the result yet (pending).
+          more=$(awk -F'\t' '$4 == "yes" && ($3 == "green" || $3 == "pending" || $5 == "CONFLICTING")' /tmp/prs.tsv | wc -l)
+
+          awk -F'\t' '$3 == "red" { print "::warning::Red CI on Renovate PR " $6 }' /tmp/prs.tsv
+          awk -F'\t' '$3 == "red" { print "::warning::Red CI on " $1 " " $2 }' /tmp/mains.tsv
+
+          {
+            echo "## Renovate round $ROUND of at most $MAX_ROUNDS ($VISIBILITY)"
+            echo
+            [ -n "$DRY_RUN" ] && echo "Dry run ($DRY_RUN): nothing was pushed or merged." && echo
+            [ "$RENOVATE_OUTCOME" != "success" ] && echo "**Renovate step: $RENOVATE_OUTCOME.** See its log." && echo
+            if [ -s /tmp/prs.tsv ]; then
+              echo "| Repo | PR | Checks | Automerge | Mergeable |"
+              echo "|---|---|---|---|---|"
+              awk -F'\t' '{ t = $7; gsub(/\|/, "\\|", t); printf "| %s | [#%s](%s) %s | %s | %s | %s |\n", $1, $2, $6, t, $3, $4, $5 }' /tmp/prs.tsv
+            else
+              echo "No open Renovate PRs."
+            fi
+            echo
+            echo "| Repo | Default branch | CI |"
+            echo "|---|---|---|"
+            awk -F'\t' '{ printf "| %s | %s | %s |\n", $1, $2, $3 }' /tmp/mains.tsv
+            echo
+            if [ "$more" -eq 0 ]; then
+              echo "Done: nothing left that Renovate can merge. PRs without automerge wait for review; see each repo's Dependency Dashboard."
+            elif [ -n "$DRY_RUN" ] || [ "$RENOVATE_OUTCOME" != "success" ]; then
+              echo "$more PR(s) could progress, but no next round after a dry run or a failed Renovate step."
+            elif [ "$ROUND" -ge "$MAX_ROUNDS" ]; then
+              echo "**Stopped after $MAX_ROUNDS rounds with $more PR(s) still able to progress.**"
+            else
+              echo "$more PR(s) can progress: dispatching round $((ROUND + 1))."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$more" -gt 0 ] && [ "$ROUND" -ge "$MAX_ROUNDS" ]; then
+            echo "::warning::Stopped after $MAX_ROUNDS rounds with $more PR(s) still able to progress"
+          fi
+          echo "more=$([ "$more" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Save repository cache
+        if: ${{ !cancelled() && steps.renovate.outcome != 'skipped' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /tmp/renovate/cache/renovate/repository
+          key: renovate-repo-cache-${{ inputs.visibility }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload report
+        if: ${{ !cancelled() && steps.renovate.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: renovate-report
+          path: /tmp/renovate/report.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # Runs under the caller's concurrency group, so the next round starts
+      # when this one has finished. workflow_dispatch is one of the events
+      # GITHUB_TOKEN may trigger.
+      - name: Dispatch the next round
+        if: >-
+          ${{ steps.wait.outputs.more == 'true' && steps.renovate.outcome == 'success'
+          && inputs.dry-run == '' && inputs.round < inputs.max-rounds }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_FILE: ${{ inputs.workflow-file }}
+          REF: ${{ github.ref_name }}
+          ROUND: ${{ inputs.round }}
+          FILTER: ${{ inputs.filter }}
+          FORCE: ${{ inputs.force }}
+          LOG_LEVEL: ${{ inputs.log-level }}
+        run: |
+          gh workflow run "$WORKFLOW_FILE" -R "$GITHUB_REPOSITORY" --ref "$REF" \
+            -f round="$((ROUND + 1))" -f filter="$FILTER" -f force="$FORCE" -f logLevel="$LOG_LEVEL"

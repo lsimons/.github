@@ -1,0 +1,105 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Shared Renovate preset for lsimons/ repos; see README.md in lsimons/.github.",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "group:allNonMajor"
+  ],
+  "timezone": "Europe/Amsterdam",
+  "schedule": [
+    "* * * * 1"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "rangeStrategy": "pin",
+  "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict",
+  "automerge": true,
+  "automergeType": "pr",
+  "automergeStrategy": "rebase",
+  "platformAutomerge": false,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true,
+    "schedule": [
+      "* * * * 1"
+    ]
+  },
+  "osvVulnerabilityAlerts": true,
+  "packageRules": [
+    {
+      "description": "Never move TypeScript to a new major (6 -> 7 needs explicit agreement; Astro needs the TS 6 API).",
+      "matchPackageNames": [
+        "typescript"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Compatibility floors, not dependencies: pyproject requires-python, package.json engines, the go.mod go directive. rangeStrategy pin would turn \">=3.15\" into \"==3.15.x\" (or raise the go floor) and automerge it. go.mod toolchain and the mise pins still update.",
+      "matchDepTypes": [
+        "requires-python",
+        "engines",
+        "golang"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "A Python minor (3.15 -> 3.16) is a language upgrade: its own PR, no automerge. Covers mise, .python-version and python Docker images.",
+      "matchDepNames": [
+        "python"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "major"
+      ],
+      "groupName": "python",
+      "automerge": false
+    },
+    {
+      "description": "zizmor-action's version input is looked up on GHCR, which has no release timestamps (so no 7-day wait). Look it up on zizmor's GitHub releases instead: the same 7-day wait as the mise zizmor pin, so both land in the same non-major PR.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/zizmorcore/zizmor"
+      ],
+      "overrideDatasource": "github-releases",
+      "overridePackageName": "zizmorcore/zizmor",
+      "extractVersion": "^v(?<version>.+)$",
+      "versioning": "semver"
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "prek.toml remote hook repos: repo = \"https://github.com/<owner>/<repo>\" followed by rev = \"<tag>\", or rev = \"<sha>\" # <tag>.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/(^|/)prek\\.toml$/"
+      ],
+      "matchStrings": [
+        "repo\\s*=\\s*\"https://github\\.com/(?<depName>[^\"]+?)(?:\\.git)?\"\\s*\\n\\s*rev\\s*=\\s*\"(?<currentValue>[^\"]+)\"[ \\t]*\\n",
+        "repo\\s*=\\s*\"https://github\\.com/(?<depName>[^\"]+?)(?:\\.git)?\"\\s*\\n\\s*rev\\s*=\\s*\"(?<currentDigest>[0-9a-f]{40})\"[ \\t]*#[ \\t]*(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "github-tags"
+    },
+    {
+      "description": "Renovate itself: renovate-version in the runner workflow, and the validator image in .mise.toml (looked up on npm, which has release timestamps; GHCR does not).",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/renovate-run\\.ya?ml$/",
+        "/^\\.mise\\.toml$/"
+      ],
+      "matchStrings": [
+        "renovate-version:\\s*(?<currentValue>\\d+\\.\\d+\\.\\d+)",
+        "ghcr\\.io/renovatebot/renovate:(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "renovate",
+      "datasourceTemplate": "npm"
+    }
+  ]
+}

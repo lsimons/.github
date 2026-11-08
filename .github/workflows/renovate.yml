@@ -1,0 +1,68 @@
+# Renovate for the public lsimons/ repos (public repos get free Actions
+# minutes). Private repos are handled by a separate, private caller of the
+# same reusable workflow. See README.md.
+#
+# Daily at 01:17 UTC. New update PRs only open on Mondays (the preset's
+# schedule); the other days merge what is green and pick up security fixes,
+# which ignore both the schedule and the 7-day wait. A manual run ignores
+# the schedule by default (force).
+name: Renovate
+run-name: Renovate${{ inputs.round > 1 && format(' round {0}', inputs.round) || '' }}
+
+on:
+  schedule:
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+    inputs:
+      dryRun:
+        description: "Dry run (off = live)"
+        type: choice
+        options: ["off", "lookup", "full"]
+        default: "off"
+      filter:
+        description: "Only these repos, e.g. lsimons/caseum (empty = all)"
+        type: string
+        default: ""
+      force:
+        description: "Ignore the Monday schedule: take everything that is due now"
+        type: boolean
+        default: true
+      logLevel:
+        type: choice
+        options: ["info", "debug"]
+        default: "info"
+      repoCache:
+        description: "Repository cache"
+        type: choice
+        options: ["enabled", "reset"]
+        default: "enabled"
+      round:
+        description: "Set by the previous round; leave at 1"
+        type: number
+        default: 1
+
+permissions: {}
+
+concurrency:
+  group: renovate
+  cancel-in-progress: false
+
+jobs:
+  renovate:
+    permissions:
+      contents: read
+      actions: write
+    # `./` rather than the `$/` self-repository syntax zizmor suggests:
+    # actionlint 1.7.12 rejects `$/`.
+    uses: ./.github/workflows/renovate-run.yml # zizmor: ignore[self-repository]
+    with:
+      visibility: public
+      round: ${{ inputs.round || 1 }}
+      dry-run: ${{ inputs.dryRun != 'off' && inputs.dryRun || '' }}
+      filter: ${{ inputs.filter }}
+      force: ${{ inputs.force || false }}
+      log-level: ${{ inputs.logLevel || 'info' }}
+      repo-cache: ${{ inputs.repoCache || 'enabled' }}
+    secrets:
+      app-client-id: ${{ secrets.RENOVATE_CLIENT_ID }}
+      app-private-key: ${{ secrets.RENOVATE_PRIVATE_KEY }}

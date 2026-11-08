@@ -1,0 +1,43 @@
+# mise: https://mise.jdx.dev/
+#
+# `mise run ci` is the gate: actionlint, zizmor and Renovate's config
+# validator. Every tool is pinned exactly; Renovate's mise manager bumps the
+# pins and mise.lock after its 7-day minimumReleaseAge.
+#
+# The validator runs from the Renovate container image (needs docker), the
+# same artifact the runner uses. The npm package is not installed: mise's
+# trust policy rejects it (a transitive dependency lost its provenance).
+
+[settings]
+minimum_release_age = "7d"
+lockfile = true
+
+[tools]
+actionlint = "1.7.12"
+# actionlint shells out to shellcheck for `run:` blocks and silently skips
+# that half without it.
+shellcheck = "0.11.0"
+zizmor = "1.31.1"
+
+[tasks.lint]
+description = "actionlint over the workflows"
+run = "actionlint"
+
+[tasks.validate]
+description = "Validate the Renovate preset and this repo's renovate.json"
+# Keep the image tag equal to `renovate-version:` in
+# .github/workflows/renovate-run.yml; Renovate bumps both in one PR.
+run = """
+docker run --rm -v "$PWD:/work:ro" -w /work --entrypoint renovate-config-validator \
+  ghcr.io/renovatebot/renovate:44.198.3 --strict renovate-config.json renovate.json
+"""
+
+# Offline audits only, so CI needs no token. Run `GH_TOKEN=$(gh auth token)
+# mise run audit` locally for the online ones too.
+[tasks.audit]
+description = "zizmor audit of the workflows"
+run = "zizmor --strict-collection ."
+
+[tasks.ci]
+description = "Full CI gate"
+depends = ["lint", "validate", "audit"]
