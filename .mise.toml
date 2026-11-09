@@ -29,7 +29,7 @@ description = "Validate the Renovate preset and this repo's renovate.json"
 # .github/workflows/renovate-run.yml; Renovate bumps both in one PR.
 run = """
 docker run --rm -v "$PWD:/work:ro" -w /work --entrypoint renovate-config-validator \
-  ghcr.io/renovatebot/renovate:44.205.1 --strict renovate-config.json renovate.json
+  ghcr.io/renovatebot/renovate:44.205.2 --strict renovate-config.json renovate.json
 """
 
 # Offline audits only, so CI needs no token. Run `GH_TOKEN=$(gh auth token)
