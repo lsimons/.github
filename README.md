@@ -64,6 +64,10 @@ mdd-* repos are excluded for now.
   Monday after it is a week old. Renovate only ages what it proposes;
   transitives rely on each repo's own cooldown (pnpm `minimumReleaseAge`, uv
   `exclude-newer = "1 week"`, bun, mise `minimum_release_age`), so keep those.
+- Lock file maintenance skips the 7-day wait: it has no release timestamp,
+  and Renovate holds an aged update without one forever. Those cooldowns age
+  what it pulls in. Cargo has no stable cooldown, so Cargo.lock gets no lock file
+  maintenance: it moves only with direct updates.
 - Vulnerability fixes (GitHub alerts and OSV) skip both the schedule and the
   7-day wait; that is Renovate's default for `vulnerabilityAlerts`.
 - TypeScript majors are disabled. Python minors (3.15 -> 3.16, across mise,
@@ -100,7 +104,9 @@ green" in one sitting:
    per repo per round), rebase PRs that fell behind or conflict.
 3. Wait for CI on Renovate's open PRs and on each default branch (up to
    about 50 minutes, the App token's lifetime).
-4. Write a summary: open PRs with their checks, and default-branch CI.
+4. Write a summary: open PRs with their checks, and default-branch CI. A
+   PR whose CI is green but whose update is still younger than the release
+   age shows as `held`; a later run merges it.
 5. If a green automerge PR is left, or one Renovate will rebase, dispatch
    the next round (at most 5).
 

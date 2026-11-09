@@ -218,6 +218,27 @@ jobs:
             branch[$repo]=$(gh api "repos/$OWNER/$repo" --jq .default_branch)
           done
 
+          # CI state of a commit: none, pending, red, green, or held.
+          # REST only: gh's statusCheckRollup also asks for each check's
+          # workflow run, which an App without Actions read cannot see in
+          # private repos.
+          # - This run's own job is left out: it is a check run on the
+          #   caller repo's default branch, pending until this step ends.
+          # - renovate/stability-days is Renovate's release-age hold, not
+          #   CI. It only changes when Renovate runs again, so waiting on it
+          #   is pointless: "held" unless the real checks are red/pending.
+          commit_state() {
+            local repo=$1 ref=$2 runs statuses
+            # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
+            runs=$(gh api "repos/$OWNER/$repo/commits/$ref/check-runs?per_page=100" \
+              --jq '[.check_runs[] | select((.details_url // "") | contains("/actions/runs/\($ENV.GITHUB_RUN_ID)/") | not) | {status, conclusion}]')
+            statuses=$(gh api "repos/$OWNER/$repo/commits/$ref/status" --jq '[.statuses[] | {context, state}]')
+            jq -rn --argjson runs "$runs" --argjson statuses "$statuses" "$checks"'
+              ($statuses | map(select(.context == "renovate/stability-days" and .state == "pending")) | length > 0) as $held
+              | ($runs + ($statuses | map(select(.context != "renovate/stability-days") | {state})) | checks) as $s
+              | if $held and ($s == "green" or $s == "none") then "held" else $s end'
+          }
+
           # prs.tsv:   repo, number, checks, automerge, mergeable, url, title
           # mains.tsv: repo, branch, checks
           snapshot() {
@@ -225,20 +246,16 @@ jobs:
             : > /tmp/mains.tsv
             for repo in ${REPOS//,/ }; do
               gh pr list -R "$OWNER/$repo" --author "app/$APP_SLUG" --state open --limit 100 \
-                --json number,title,url,body,mergeable,statusCheckRollup \
-                --jq "$checks"' .[] | [(.number | tostring), (.statusCheckRollup | checks),
+                --json number,title,url,body,mergeable,headRefOid \
+                --jq '.[] | [(.number | tostring), .headRefOid,
                         (if ((.body // "") | contains("**Automerge**: Enabled")) then "yes" else "no" end),
-                        .mergeable, .url, .title] | @tsv' \
-                | sed "s|^|$repo\t|" >> /tmp/prs.tsv
+                        .mergeable, .url, .title] | @tsv' > /tmp/repo-prs.tsv
+              while IFS=$'\t' read -r number sha automerge mergeable url title; do
+                printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$repo" "$number" "$(commit_state "$repo" "$sha")" \
+                  "$automerge" "$mergeable" "$url" "$title" >> /tmp/prs.tsv
+              done < /tmp/repo-prs.tsv
               b=${branch[$repo]}
-              # Leave out this run's own job: it is a check run on the
-              # caller repo's default branch, pending until this step ends.
-              # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
-              runs=$(gh api "repos/$OWNER/$repo/commits/$b/check-runs?per_page=100" \
-                --jq '[.check_runs[] | select((.details_url // "") | contains("/actions/runs/\($ENV.GITHUB_RUN_ID)/") | not) | {status, conclusion}]')
-              statuses=$(gh api "repos/$OWNER/$repo/commits/$b/status" --jq '[.statuses[] | {state}]')
-              state=$(jq -rn --argjson a "$runs" --argjson b "$statuses" "$checks"' $a + $b | checks')
-              printf '%s\t%s\t%s\n' "$repo" "$b" "$state" >> /tmp/mains.tsv
+              printf '%s\t%s\t%s\n' "$repo" "$b" "$(commit_state "$repo" "$b")" >> /tmp/mains.tsv
             done
           }
 
@@ -261,6 +278,7 @@ jobs:
 
           # Another round helps if Renovate would merge (green), rebase
           # (conflicting) or just has not seen the result yet (pending).
+          # Not for "held": the release age does not pass within a run.
           more=$(awk -F'\t' '$4 == "yes" && ($3 == "green" || $3 == "pending" || $5 == "CONFLICTING")' /tmp/prs.tsv | wc -l)
 
           awk -F'\t' '$3 == "red" { print "::warning::Red CI on Renovate PR " $6 }' /tmp/prs.tsv
@@ -283,6 +301,10 @@ jobs:
             echo "|---|---|---|"
             awk -F'\t' '{ printf "| %s | %s | %s |\n", $1, $2, $3 }' /tmp/mains.tsv
             echo
+            if cut -f3 /tmp/prs.tsv | grep -qx held; then
+              echo "held: CI is green, but an update is younger than the minimum release age (\`renovate/stability-days\`). A later run merges it."
+              echo
+            fi
             if [ "$more" -eq 0 ]; then
               echo "Done: nothing left that Renovate can merge. PRs without automerge wait for review; see each repo's Dependency Dashboard."
             elif [ -n "$DRY_RUN" ] || [ "$RENOVATE_OUTCOME" != "success" ]; then

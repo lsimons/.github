@@ -49,6 +49,23 @@
       "enabled": false
     },
     {
+      "description": "Lock file maintenance has no release timestamp, and with the default minimumReleaseAgeBehaviour (timestamp-required) a minimumReleaseAge without a timestamp is pending forever, so it never automerges. The transitives it pulls in are aged by each ecosystem's own cooldown (pnpm minimumReleaseAge, uv exclude-newer, bun, mise minimum_release_age).",
+      "matchUpdateTypes": [
+        "lockFileMaintenance"
+      ],
+      "minimumReleaseAge": null
+    },
+    {
+      "description": "Cargo has no stable release-age cooldown (min-publish-age is unstable), so lock file maintenance would pull in crates published minutes ago. Cargo.lock still moves with each direct update.",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchUpdateTypes": [
+        "lockFileMaintenance"
+      ],
+      "enabled": false
+    },
+    {
       "description": "Overrides are hand-maintained advisory floors (\"x@<1.2.2\": \"^1.2.2\"), not dependencies: pinning would turn the floor into an exact version, and a major would leave the parents' range. Renovate's vulnerability fixes still raise them when an advisory needs it.",
       "matchDepTypes": [
         "overrides",
