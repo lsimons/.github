@@ -17,7 +17,7 @@ actionlint = "1.7.12"
 # actionlint shells out to shellcheck for `run:` blocks and silently skips
 # that half without it.
 shellcheck = "0.11.0"
-zizmor = "1.31.1"
+zizmor = "1.32.0"
 
 [tasks.lint]
 description = "actionlint over the workflows"
