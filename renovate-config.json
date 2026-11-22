@@ -101,7 +101,7 @@
       "versioning": "semver"
     },
     {
-      "description": "Renovate's own image (the github-action renovate-version input, the validator in .mise.toml) is looked up on GHCR, which has no release timestamps, so the 7-day wait would not apply. Look it up on npm instead, which has them; same versions.",
+      "description": "Renovate's own image (the github-action renovate-version input) is looked up on GHCR, which has no release timestamps, so the 7-day wait would not apply. Look it up on npm instead, which has them; same versions.",
       "matchDatasources": [
         "docker"
       ],
@@ -124,18 +124,6 @@
         "repo\\s*=\\s*\"https://github\\.com/(?<depName>[^\"]+?)(?:\\.git)?\"\\s*\\n\\s*rev\\s*=\\s*\"(?<currentDigest>[0-9a-f]{40})\"[ \\t]*#[ \\t]*(?<currentValue>\\S+)"
       ],
       "datasourceTemplate": "github-tags"
-    },
-    {
-      "description": "The Renovate image the validator runs from in .mise.toml (`docker run ... ghcr.io/renovatebot/renovate:<version>`). The runner's renovate-version input needs no custom manager: the github-actions manager reads it.",
-      "customType": "regex",
-      "managerFilePatterns": [
-        "/^\\.mise\\.toml$/"
-      ],
-      "matchStrings": [
-        "ghcr\\.io/renovatebot/renovate:(?<currentValue>\\d+\\.\\d+\\.\\d+)"
-      ],
-      "depNameTemplate": "ghcr.io/renovatebot/renovate",
-      "datasourceTemplate": "docker"
     }
   ]
 }
