@@ -25,11 +25,19 @@ run = "actionlint"
 
 [tasks.validate]
 description = "Validate the Renovate preset and this repo's renovate.json"
-# Keep the image tag equal to `renovate-version:` in
-# .github/workflows/renovate-run.yml; Renovate bumps both in one PR.
+# The image tag is read from `renovate-version:` in
+# .github/workflows/renovate-run.yml, so the validator always matches the
+# runner and Renovate only has one place to bump. The tag used to be written
+# here too, but Renovate then passed the image name to `mise lock` when
+# updating mise.lock, which mise rejects as an unknown tool.
 run = """
+version=$(sed -n 's/^ *renovate-version: *\\([0-9.]*\\) *$/\\1/p' .github/workflows/renovate-run.yml)
+if [ -z "$version" ]; then
+  echo "no renovate-version: found in .github/workflows/renovate-run.yml" >&2
+  exit 1
+fi
 docker run --rm -v "$PWD:/work:ro" -w /work --entrypoint renovate-config-validator \
-  ghcr.io/renovatebot/renovate:44.205.2 --strict renovate-config.json renovate.json
+  "ghcr.io/renovatebot/renovate:$version" --strict renovate-config.json renovate.json
 """
 
 # Offline audits only, so CI needs no token. Run `GH_TOKEN=$(gh auth token)
